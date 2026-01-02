@@ -4,17 +4,18 @@ on:
   push:
     branches:
       - main
+  pull_request:
 
 jobs:
   code-review:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout repo
+      # 1️⃣ Checkout code
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
 
       # 2️⃣ Configure AWS credentials
       - name: Configure AWS credentials
@@ -24,34 +25,32 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # 3️⃣ Install jq
+      # 3️⃣ Install jq (used for JSON creation)
       - name: Install jq
-        run: sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
-      # 4️⃣ Get git diff
+      # 4️⃣ Collect git diff safely
       - name: Collect git diff
         run: |
-          git diff HEAD~1 HEAD > diff.txt
+          git diff HEAD~1 HEAD > diff.txt || echo "" > diff.txt
 
-      # 5️⃣ Prepare Lambda payload
+      # 5️⃣ Prepare payload (base64-safe, ASCII-safe)
       - name: Prepare payload
         run: |
           jq -n --arg diff "$(cat diff.txt)" \
-          '{ files: [ { filename: "git_diff.patch", content: $diff } ] }' > payload.json
+          '{ files: [ { filename: "git_diff.patch", content: $diff } ] }' \
+          | base64 > payload.b64
 
-      # 6️⃣ Invoke Lambda
+      # 6️⃣ Invoke Lambda (correct AWS CLI v2 format)
       - name: Invoke Lambda for AI Code Review
         run: |
           aws lambda invoke \
             --function-name code-review-lambda \
-            --payload file://payload.json \
+            --payload file://payload.b64 \
+            --cli-binary-format raw-in-base64-out \
             response.json
 
-      # 7️⃣ Show AI review result + PDF link
+      # 7️⃣ Show Lambda response
       - name: Show AI Code Review Result
         run: |
-          echo "===== AI Code Review Response ====="
           cat response.json
-          echo ""
-          echo "===== PDF Report Link ====="
-          cat response.json | jq -r '.body' | jq -r '.pdf_url'
