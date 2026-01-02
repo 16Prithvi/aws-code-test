@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout repository
+      # 1️⃣ Checkout repository (full history needed for diff)
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -24,26 +24,29 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # 3️⃣ Install jq (only used for parsing response)
+      # 3️⃣ Install jq (used only for response parsing)
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      # 4️⃣ Collect git diff (SAFE for PRs & pushes)
+      # 4️⃣ Collect git diff (SAFE for push + PR)
       - name: Collect git diff
         run: |
-          git fetch origin main
-          git diff origin/main...HEAD > diff.txt || echo "No diff" > diff.txt
+          git fetch origin main || true
+          git diff origin/main...HEAD > diff.txt || echo "No diff available" > diff.txt
 
       # 5️⃣ Build payload SAFELY using Python (NO jq, NO shell injection)
       - name: Prepare payload
         run: |
-          python3 - <<EOF
+          python3 - <<'EOF'
           import json
 
           try:
               with open("diff.txt", "r", encoding="utf-8", errors="ignore") as f:
                   diff = f.read()
-          except:
+          except Exception:
+              diff = "No diff available"
+
+          if not diff.strip():
               diff = "No diff available"
 
           payload = {
@@ -58,10 +61,10 @@ jobs:
           with open("payload.json", "w", encoding="utf-8") as f:
               json.dump(payload, f)
 
-          print("Payload written successfully")
+          print("Payload prepared successfully")
           EOF
 
-      # 6️⃣ Invoke Lambda
+      # 6️⃣ Invoke Lambda (correct AWS CLI v2 format)
       - name: Invoke Lambda for AI Code Review
         run: |
           aws lambda invoke \
@@ -70,17 +73,37 @@ jobs:
             --cli-binary-format raw-in-base64-out \
             response.json
 
-      # 7️⃣ Show Lambda response
+      # 7️⃣ Show raw Lambda response (debug-safe)
       - name: Show AI Code Review Result
-        run: cat response.json
+        run: |
+          echo "Lambda response:"
+          cat response.json
 
-      # 8️⃣ Post PDF link as PR comment
+      # 8️⃣ Extract PDF URL SAFELY (NO jq crashes)
+      - name: Extract PDF URL
+        run: |
+          BODY=$(jq -r '.body' response.json)
+
+          echo "Lambda body:"
+          echo "$BODY"
+
+          PDF_URL=$(echo "$BODY" | jq -r 'try fromjson | .pdf_url // empty')
+
+          if [ -z "$PDF_URL" ]; then
+            echo "❌ PDF URL not found in Lambda response"
+            exit 1
+          fi
+
+          echo "$PDF_URL" > pdf_url.txt
+          echo "PDF URL extracted successfully"
+
+      # 9️⃣ Post PDF link as PR comment
       - name: Post PDF link as PR comment
         if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PDF_URL=$(jq -r '.body | fromjson | .pdf_url' response.json)
+          PDF_URL=$(cat pdf_url.txt)
 
           COMMENT=$(jq -n \
             --arg url "$PDF_URL" \
