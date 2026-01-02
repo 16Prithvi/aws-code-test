@@ -2,7 +2,6 @@
 
 An end-to-end, serverless, and automated code review pipeline seamlessly integrated into GitHub Actions. This project leverages **AWS components** and **Generative AI (Amazon Bedrock)** to provide intelligent, contextual, and secure code analysis for every pull request.
 
-![High-Level Architecture](images/architecture-diagram.png)
 
 ---
 
@@ -53,7 +52,7 @@ The AI evaluates:
 ### 1. Automated Trigger
 Start by opening a Pull Request. The GitHub Action kicks off immediately.
 
-![GitHub Action Run](images/github-action-run.png)
+![GitHub Action Run](images/pull-req.png)
 
 ### 2. Intelligent Commenting
 Within seconds, the AI posts a comment on your PR with a secure link to the detailed report.
@@ -63,7 +62,7 @@ Within seconds, the AI posts a comment on your PR with a secure link to the deta
 ### 3. Comprehensive Reports
 The PDF reports are archives in Amazon S3, accessible via presigned URLs or direct console access for auditors.
 
-![S3 Bucket Reports](images/s3-bucket-reports.png)
+![S3 Bucket Reports](images/s3-bucket-report.png)
 
 ---
 
