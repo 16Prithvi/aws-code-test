@@ -2,7 +2,9 @@ name: AI Code Review
 
 on:
   pull_request:
+    branches: [ main ]
   push:
+    branches: [ main ]
 
 jobs:
   code-review:
@@ -11,6 +13,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -19,53 +23,98 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: Install jq
-        run: sudo apt-get install -y jq
-
-      - name: Collect git diff
+      - name: Collect code diff safely
         run: |
+          set +e
           git fetch origin main
-          git diff origin/main...HEAD > diff.txt
 
-      - name: Prepare payload
-        run: |
-          if [ ! -s diff.txt ]; then
-            echo '{"files":[]}' > payload.json
-          else
-            jq -n --rawfile diff diff.txt '{files:[{filename:"diff.patch",content:$diff}]}' > payload.json
+          # Try PR diff
+          git diff origin/main...HEAD > diff.txt 2>/dev/null
+
+          # Fallback to last commit if no merge base
+          if [ $? -ne 0 ] || [ ! -s diff.txt ]; then
+            echo "Using last commit diff"
+            git diff HEAD~1 > diff.txt || true
           fi
 
-      - name: Invoke Lambda for AI Code Review
+          # Final fallback
+          if [ ! -s diff.txt ]; then
+            echo "No code changes detected" > diff.txt
+          fi
+
+          echo "=== DIFF CONTENT ==="
+          cat diff.txt
+
+      - name: Build Lambda payload (SAFE JSON)
+        run: |
+          python - <<EOF
+          import json
+
+          with open("diff.txt", "r", encoding="utf-8", errors="ignore") as f:
+              diff = f.read()
+
+          payload = {
+              "files": [
+                  {
+                      "filename": "git-diff.txt",
+                      "content": diff[:12000]
+                  }
+              ]
+          }
+
+          with open("payload.json", "w", encoding="utf-8") as f:
+              json.dump(payload, f)
+          EOF
+
+      - name: Invoke AI Code Review Lambda
         run: |
           aws lambda invoke \
-            --function-name YOUR_REAL_LAMBDA_NAME \
-            --cli-binary-format raw-in-base64-out \
+            --function-name ai-code-review-lambda \
             --payload file://payload.json \
             response.json
+
+          echo "=== LAMBDA RESPONSE ==="
           cat response.json
 
-      - name: Extract PDF URL
+      - name: Extract PDF URL safely
         run: |
-          BODY=$(jq -r '.body' response.json)
+          python - <<EOF
+          import json, sys
 
-          if echo "$BODY" | jq . >/dev/null 2>&1; then
-            echo "$BODY" | jq -r '.pdf_url' > pdf_url.txt
-          else
-            echo "" > pdf_url.txt
-          fi
+          with open("response.json", "r", encoding="utf-8", errors="ignore") as f:
+              data = json.load(f)
+
+          body = data.get("body")
+          if not body:
+              print("No body returned")
+              sys.exit(0)
+
+          if isinstance(body, str):
+              body = json.loads(body)
+
+          pdf = body.get("pdf_url")
+          if not pdf:
+              print("No PDF URL")
+              sys.exit(0)
+
+          with open("pdf_url.txt", "w") as f:
+              f.write(pdf)
+
+          print("PDF URL:", pdf)
+          EOF
 
       - name: Post PDF link as PR comment
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const url = fs.readFileSync('pdf_url.txt','utf8').trim();
-            if (url) {
-              github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: `📄 **AI Code Review Report**\n\n${url}`
-              });
-            }
+        run: |
+          if [ ! -f pdf_url.txt ]; then
+            echo "No PDF to post"
+            exit 0
+          fi
+
+          PDF_URL=$(cat pdf_url.txt)
+
+          curl -s -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \
+            -d "{\"body\": \"🧠 **AI Code Review Report**\\n\\n📄 PDF: $PDF_URL\"}"
