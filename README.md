@@ -1,6 +1,6 @@
 # 🚀 AI-Powered Code Review Automation System
 
-An end-to-end, serverless, and automated code review pipeline seamlessly integrated into GitHub Actions. This project leverages **AWS components** and **Generative AI (Amazon Bedrock)** to provide intelligent, contextual, and secure code analysis for every pull request.
+This project is an automated AI-driven CI/CD pipeline that transforms code reviews into a seamless serverless workflow. By integrating GitHub Actions with AWS Lambda and Amazon Bedrock, it performs deep architectural audits for every Pull Request. It generates professional PDF reports via the FPDF library, archives them in Amazon S3, and posts results directly back to GitHub. This ensures secure, scalable, and context-aware code analysis using Claude 3.5 Sonnet.
 
 
 ---
@@ -49,21 +49,21 @@ The AI evaluates:
 
 ## 📸 Workflow & Demo
 
-### 1.GitHub Actions Workflow Execution
+### 1. GitHub Actions Workflow Execution
 This image illustrates the CI/CD pipeline in motion. The GitHub Actions workflow, "stable AI code review workflow," has executed successfully. It tracks every step from checking out the repository and configuring AWS credentials to invoking the Lambda function and extracting the final PDF URL. It serves as proof of a robust, automated integration between GitHub and AWS.
-
-<img width="850" height="450" alt="pull-req" src="https://github.com/user-attachments/assets/5d6400c1-51a4-499b-b40a-8f0cf97913e8" />
-
-### 2.Persistent Storage in Amazon S3
-This screenshot captures the Amazon S3 console, showing the reports/ directory within your dedicated bucket. It lists the generated PDF code review artifacts, each tagged with a unique identifier. This highlights the project’s ability to store historical audits securely, ensuring that every code review is archived as a persistent, downloadable resource for the development team.
-Within seconds, the AI posts a comment on your PR with a secure link to the detailed report.
 
 <img width="850" height="450" alt="github-pr-comment" src="https://github.com/user-attachments/assets/5cd3c0ce-3ca0-456f-91a5-4b26560062bc" />
 
-### 3.Pull Request Status Integration
-The final piece of the puzzle: a GitHub Pull Request showing a successful automated check. The "AI Code Review" job is marked with a green checkmark, indicating that the code has been audited and the report is ready. This demonstrates how the tool provides immediate feedback within the developer's native workflow, helping catch security flaws and logical errors before any code is merged
+### 2. Persistent Storage in Amazon S3
+This screenshot captures the Amazon S3 console, showing the reports/ directory within your dedicated bucket. It lists the generated PDF code review artifacts, each tagged with a unique identifier. This highlights the project’s ability to store historical audits securely, ensuring that every code review is archived as a persistent, downloadable resource for the development team.
+Within seconds, the AI posts a comment on your PR with a secure link to the detailed report.
 
 <img width="850" height="450" alt="s3-bucket-report" src="https://github.com/user-attachments/assets/e8683d8b-2b53-4eda-945c-43d0ae7437d4" />
+
+### 3. Pull Request Status Integration
+The final piece of the puzzle: a GitHub Pull Request showing a successful automated check. The "AI Code Review" job is marked with a green checkmark, indicating that the code has been audited and the report is ready. This demonstrates how the tool provides immediate feedback within the developer's native workflow, helping catch security flaws and logical errors before any code is merged.
+
+<img width="850" height="450" alt="pull-req" src="https://github.com/user-attachments/assets/5d6400c1-51a4-499b-b40a-8f0cf97913e8" />
 
 ---
 
