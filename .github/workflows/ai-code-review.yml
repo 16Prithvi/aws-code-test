@@ -24,26 +24,22 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # 3️⃣ Install jq
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      # 4️⃣ Collect git diff (SAFE for push + PR)
+      # 3️⃣ Collect git diff safely
       - name: Collect git diff
         run: |
           git fetch origin main || true
-          git diff origin/main...HEAD > diff.txt || echo "No diff" > diff.txt
+          git diff origin/main...HEAD > diff.txt || echo "No diff available" > diff.txt
 
-      # 5️⃣ Prepare payload safely using Python
+      # 4️⃣ Build Lambda payload safely using Python
       - name: Prepare payload
         run: |
-          python3 - <<EOF
+          python3 - <<'EOF'
           import json
 
           try:
               with open("diff.txt", "r", encoding="utf-8", errors="ignore") as f:
                   diff = f.read()
-          except:
+          except Exception:
               diff = "No diff available"
 
           payload = {
@@ -58,10 +54,10 @@ jobs:
           with open("payload.json", "w", encoding="utf-8") as f:
               json.dump(payload, f)
 
-          print("Payload prepared successfully")
+          print("Payload prepared")
           EOF
 
-      # 6️⃣ Invoke Lambda (CORRECT AWS CLI FORMAT)
+      # 5️⃣ Invoke Lambda (RAW JSON, no jq involved)
       - name: Invoke Lambda for AI Code Review
         run: |
           aws lambda invoke \
@@ -70,48 +66,61 @@ jobs:
             --cli-binary-format raw-in-base64-out \
             response.json
 
-      # 7️⃣ Show Lambda response (always safe)
-      - name: Show AI Code Review Result
-        run: |
-          echo "Lambda response:"
+          echo "Lambda response file:"
           cat response.json
 
-      # 8️⃣ Extract PDF URL SAFELY (NO CRASHES)
+      # 6️⃣ Extract PDF URL using Python (NO jq → NO CRASH)
       - name: Extract PDF URL
         run: |
-          BODY=$(jq -r '.body' response.json || echo "")
-          echo "Lambda body:"
-          echo "$BODY"
+          python3 - <<'EOF'
+          import json
+          import sys
 
-          PDF_URL=$(echo "$BODY" | jq -r 'try fromjson | .pdf_url // empty')
+          try:
+              with open("response.json", "r", encoding="utf-8", errors="ignore") as f:
+                  data = json.load(f)
+          except Exception as e:
+              print("Failed to parse response.json:", e)
+              sys.exit(0)
 
-          if [ -z "$PDF_URL" ]; then
-            echo "⚠️ PDF URL not available (Lambda may have returned an error)."
-            exit 0
-          fi
+          body = data.get("body")
+          if not body:
+              print("No body in Lambda response")
+              sys.exit(0)
 
-          echo "$PDF_URL" > pdf_url.txt
-          echo "✅ PDF URL extracted: $PDF_URL"
+          # body may be a JSON string
+          try:
+              body_json = json.loads(body)
+          except Exception:
+              print("Body is not JSON:", body)
+              sys.exit(0)
 
-      # 9️⃣ Post PDF link as PR comment (PRs only)
+          pdf_url = body_json.get("pdf_url")
+          if not pdf_url:
+              print("No pdf_url found")
+              sys.exit(0)
+
+          with open("pdf_url.txt", "w") as f:
+              f.write(pdf_url)
+
+          print("PDF URL:", pdf_url)
+          EOF
+
+      # 7️⃣ Post PDF link as PR comment (only if PDF exists)
       - name: Post PDF link as PR comment
         if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ ! -f pdf_url.txt ]; then
-            echo "No PDF URL to post."
+            echo "No PDF URL to post"
             exit 0
           fi
 
           PDF_URL=$(cat pdf_url.txt)
 
-          COMMENT=$(jq -n \
-            --arg url "$PDF_URL" \
-            '{ body: "🤖 **AI Code Review Completed**\n\n📄 **PDF Report:** \($url)\n\n_Automatically generated via AWS Lambda_" }')
-
           curl -s -X POST \
             -H "Authorization: token $GITHUB_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "$COMMENT" \
+            -d "{\"body\": \"🤖 **AI Code Review Completed**\n\n📄 **PDF Report:** $PDF_URL\"}" \
             "${{ github.event.pull_request.comments_url }}"
