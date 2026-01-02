@@ -10,9 +10,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ Checkout repo
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
+      # 2️⃣ Configure AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -20,32 +24,34 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      - name: Generate payload from git diff
+      # 3️⃣ Install jq
+      - name: Install jq
+        run: sudo apt-get install -y jq
+
+      # 4️⃣ Get git diff
+      - name: Collect git diff
         run: |
-          echo '{ "files": [' > payload.json
+          git diff HEAD~1 HEAD > diff.txt
 
-          git diff --name-only HEAD~1 HEAD | while read file; do
-            if [ -f "$file" ]; then
-              CONTENT=$(sed 's/"/\\"/g' "$file" | tr '\n' ' ')
-              echo "  {\"filename\": \"$file\", \"content\": \"$CONTENT\"}," >> payload.json
-            fi
-          done
+      # 5️⃣ Prepare Lambda payload
+      - name: Prepare payload
+        run: |
+          jq -n --arg diff "$(cat diff.txt)" \
+          '{ files: [ { filename: "git_diff.patch", content: $diff } ] }' > payload.json
 
-          sed -i '$ s/,$//' payload.json
-          echo '] }' >> payload.json
-
-          echo "Generated payload:"
-          cat payload.json
-
+      # 6️⃣ Invoke Lambda
       - name: Invoke Lambda for AI Code Review
         run: |
           aws lambda invoke \
             --function-name code-review-lambda \
-            --region us-east-1 \
-            --cli-binary-format raw-in-base64-out \
             --payload file://payload.json \
             response.json
 
-      - name: Show Lambda response
+      # 7️⃣ Show AI review result + PDF link
+      - name: Show AI Code Review Result
         run: |
+          echo "===== AI Code Review Response ====="
           cat response.json
+          echo ""
+          echo "===== PDF Report Link ====="
+          cat response.json | jq -r '.body' | jq -r '.pdf_url'
