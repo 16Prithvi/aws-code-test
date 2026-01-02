@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout repo
+      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -27,55 +27,40 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      # 4️⃣ Collect git diff
+      # 4️⃣ Collect git diff (PR → main)
       - name: Collect git diff
         run: |
           git fetch origin main
           git diff origin/main...HEAD > diff.txt
 
-      # 5️⃣ Prepare payload JSON
+      # 5️⃣ Prepare JSON payload (NO base64)
       - name: Prepare payload
         run: |
-          jq -n \
-            --rawfile diff diff.txt \
-            '{ diff: $diff }' > payload.json
+          jq -Rs '{diff: .}' diff.txt > payload.json
+          cat payload.json
 
-      # 6️⃣ Base64 encode payload (STRICT FIX)
-      - name: Base64 encode payload
-        run: |
-          base64 -w 0 payload.json > payload.b64
-
-      # 7️⃣ Invoke Lambda (CRITICAL FIX: JSON output enforced)
+      # 6️⃣ Invoke Lambda (RAW JSON — THIS IS THE FIX)
       - name: Invoke Lambda for AI Code Review
         run: |
           aws lambda invoke \
             --function-name ai-code-review-lambda \
             --cli-binary-format raw-in-base64-out \
-            --payload "$(cat payload.b64)" \
-            --output json \
+            --payload file://payload.json \
             response.json
-
-      # 8️⃣ Show Lambda raw response (debug-safe)
-      - name: Show AI Code Review Result
-        run: |
           cat response.json
 
-      # 9️⃣ Extract PDF URL (FINAL FIX)
+      # 7️⃣ Extract PDF URL safely
       - name: Extract PDF URL
         run: |
           jq -r '.body | fromjson | .pdf_url' response.json > pdf_url.txt
+          cat pdf_url.txt
 
-      # 🔟 Post PDF link as PR comment
+      # 8️⃣ Post PDF link as PR comment
       - name: Post PDF link as PR comment
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const url = fs.readFileSync('pdf_url.txt', 'utf8').trim();
-
-            github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: `🧠 **AI Code Review Report**\n\n📄 PDF: ${url}`
-            });
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PDF_URL=$(cat pdf_url.txt)
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "📄 **AI Code Review Report**  
+          🔗 $PDF_URL"
