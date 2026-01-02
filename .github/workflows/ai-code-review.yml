@@ -9,11 +9,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ Checkout repo
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      # 2️⃣ Configure AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -21,54 +23,59 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
+      # 3️⃣ Install jq
       - name: Install jq
-        run: sudo apt-get install -y jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
+      # 4️⃣ Collect git diff
       - name: Collect git diff
         run: |
+          git fetch origin main
           git diff origin/main...HEAD > diff.txt
 
+      # 5️⃣ Prepare payload JSON
       - name: Prepare payload
         run: |
           jq -n \
             --rawfile diff diff.txt \
-            '{
-              files: [
-                {
-                  filename: "git-diff.patch",
-                  content: $diff
-                }
-              ]
-            }' > payload.json
+            '{ diff: $diff }' > payload.json
 
+      # 6️⃣ Base64 encode payload (STRICT FIX)
       - name: Base64 encode payload
         run: |
-          base64 payload.json > payload.b64
+          base64 -w 0 payload.json > payload.b64
 
+      # 7️⃣ Invoke Lambda (CRITICAL FIX: JSON output enforced)
       - name: Invoke Lambda for AI Code Review
         run: |
           aws lambda invoke \
-            --function-name code-review-lambda \
+            --function-name ai-code-review-lambda \
+            --cli-binary-format raw-in-base64-out \
             --payload "$(cat payload.b64)" \
+            --output json \
             response.json
 
+      # 8️⃣ Show Lambda raw response (debug-safe)
       - name: Show AI Code Review Result
         run: |
           cat response.json
 
+      # 9️⃣ Extract PDF URL (FINAL FIX)
       - name: Extract PDF URL
         run: |
           jq -r '.body | fromjson | .pdf_url' response.json > pdf_url.txt
 
+      # 🔟 Post PDF link as PR comment
       - name: Post PDF link as PR comment
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const pdfUrl = fs.readFileSync('pdf_url.txt', 'utf8').trim();
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
+            const url = fs.readFileSync('pdf_url.txt', 'utf8').trim();
+
+            github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `🧠 **AI Code Review Report**\n\n📄 PDF: ${pdfUrl}`
-            })
+              issue_number: context.issue.number,
+              body: `🧠 **AI Code Review Report**\n\n📄 PDF: ${url}`
+            });
