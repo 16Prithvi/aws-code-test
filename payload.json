@@ -1,0 +1,9 @@
+{
+    "files": [
+      {
+        "filename": "example.py",
+        "content": "def add(a, b): return a + b"
+      }
+    ]
+  }
+  
