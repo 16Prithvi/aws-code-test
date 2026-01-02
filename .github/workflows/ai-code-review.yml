@@ -2,20 +2,16 @@ name: AI Code Review
 
 on:
   pull_request:
-    branches: [ main ]
+  push:
 
 jobs:
   code-review:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      # 2️⃣ Configure AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -23,44 +19,53 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # 3️⃣ Install jq
       - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+        run: sudo apt-get install -y jq
 
-      # 4️⃣ Collect git diff (PR → main)
       - name: Collect git diff
         run: |
           git fetch origin main
           git diff origin/main...HEAD > diff.txt
 
-      # 5️⃣ Prepare JSON payload (NO base64)
       - name: Prepare payload
         run: |
-          jq -Rs '{diff: .}' diff.txt > payload.json
-          cat payload.json
+          if [ ! -s diff.txt ]; then
+            echo '{"files":[]}' > payload.json
+          else
+            jq -n --rawfile diff diff.txt '{files:[{filename:"diff.patch",content:$diff}]}' > payload.json
+          fi
 
-      # 6️⃣ Invoke Lambda (RAW JSON — THIS IS THE FIX)
       - name: Invoke Lambda for AI Code Review
         run: |
           aws lambda invoke \
-            --function-name code-review-lambda \
+            --function-name YOUR_REAL_LAMBDA_NAME \
             --cli-binary-format raw-in-base64-out \
             --payload file://payload.json \
             response.json
           cat response.json
 
-      # 7️⃣ Extract PDF URL safely
       - name: Extract PDF URL
         run: |
-          jq -r '.body | fromjson | .pdf_url' response.json > pdf_url.txt
-          cat pdf_url.txt
+          BODY=$(jq -r '.body' response.json)
 
-      # 8️⃣ Post PDF link as PR comment
+          if echo "$BODY" | jq . >/dev/null 2>&1; then
+            echo "$BODY" | jq -r '.pdf_url' > pdf_url.txt
+          else
+            echo "" > pdf_url.txt
+          fi
+
       - name: Post PDF link as PR comment
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          PDF_URL=$(cat pdf_url.txt)
-          gh pr comment ${{ github.event.pull_request.number }} \
-            --body "📄 **AI Code Review Report**  
-          🔗 $PDF_URL"
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const url = fs.readFileSync('pdf_url.txt','utf8').trim();
+            if (url) {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `📄 **AI Code Review Report**\n\n${url}`
+              });
+            }
