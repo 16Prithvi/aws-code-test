@@ -54,3 +54,22 @@ jobs:
       - name: Show AI Code Review Result
         run: |
           cat response.json
+      # 8️⃣ Post PDF link as PR comment (only for PRs)
+      - name: Post PDF link as PR comment
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PDF_URL=$(cat response.json | jq -r '.body' | jq -r '.pdf_url')
+
+          COMMENT_BODY=$(jq -n \
+            --arg url "$PDF_URL" \
+            '{
+              body: "🤖 **AI Code Review Completed**\n\n📄 **PDF Report:** \($url)\n\n_Generated automatically via AWS Lambda + Amazon Bedrock_"
+            }')
+
+          curl -s -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$COMMENT_BODY" \
+            "${{ github.event.pull_request.comments_url }}"
