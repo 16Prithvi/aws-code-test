@@ -45,26 +45,32 @@ jobs:
           echo "=== DIFF CONTENT ==="
           cat diff.txt
 
-      - name: Build Lambda payload (SAFE JSON)
-        run: |
-          python - <<EOF
-          import json
+      - name: Build Lambda payload (JSON-safe)
+         run: |
+    python - <<EOF
+    import json
 
-          with open("diff.txt", "r", encoding="utf-8", errors="ignore") as f:
-              diff = f.read()
+    try:
+        with open("diff.txt", "r", encoding="utf-8", errors="ignore") as f:
+            diff = f.read()
+    except FileNotFoundError:
+        diff = "No diff found"
 
-          payload = {
-              "files": [
-                  {
-                      "filename": "git-diff.txt",
-                      "content": diff[:12000]
-                  }
-              ]
-          }
+    payload = {
+        "files": [
+            {
+                "filename": "git-diff.txt",
+                "content": diff[:12000]
+            }
+        ]
+    }
 
-          with open("payload.json", "w", encoding="utf-8") as f:
-              json.dump(payload, f)
-          EOF
+    with open("payload.json", "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+
+    print("Payload created successfully")
+    EOF
+
 
       - name: Invoke AI Code Review Lambda
         run: |
