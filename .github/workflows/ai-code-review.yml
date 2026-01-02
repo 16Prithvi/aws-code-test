@@ -1,24 +1,11 @@
-name: AI Code Review
-
-on:
-  push:
-    branches:
-      - main
-
-jobs:
-  code-review:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+      - name: Generate payload from git diff
+        run: |
+          echo '{ "files": [' > payload.json
+          git diff --name-only HEAD~1 HEAD | while read file; do
+            echo "  {\"filename\": \"$file\", \"content\": \"$(sed 's/"/\\"/g' $file | tr '\n' ' ')\"}," >> payload.json
+          done
+          sed -i '$ s/,$//' payload.json
+          echo '] }' >> payload.json
 
       - name: Invoke Lambda for AI Code Review
         run: |
@@ -28,6 +15,3 @@ jobs:
             --cli-binary-format raw-in-base64-out \
             --payload file://payload.json \
             response.json
-
-      - name: Show Lambda response
-        run: cat response.json
