@@ -71,6 +71,79 @@ jobs:
           cat response.json
 
       # 8️⃣ Extract PDF URL (Robust Parsing)
+      name: AI Code Review
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2️⃣ Configure AWS credentials
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      # 3️⃣ Install jq
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      # 4️⃣ Collect git diff
+      - name: Collect git diff
+        run: |
+          git fetch origin main || true
+          git diff origin/main...HEAD > diff.txt || echo "No diff available" > diff.txt
+
+      # 5️⃣ Build payload safely using Python
+      - name: Prepare payload
+        run: |
+          python3 - <<'EOF'
+          import json
+          try:
+              with open("diff.txt", "r", encoding="utf-8", errors="ignore") as f:
+                  diff = f.read()
+          except Exception:
+              diff = "No diff available"
+
+          payload = {
+              "files": [{
+                  "filename": "git_diff.patch",
+                  "content": diff[:12000] # Limit size for Lambda/Bedrock limits
+              }]
+          }
+          with open("payload.json", "w") as f:
+              json.dump(payload, f)
+          EOF
+
+      # 6️⃣ Invoke Lambda
+      - name: Invoke Lambda for AI Code Review
+        run: |
+          aws lambda invoke \
+            --function-name code-review-lambda \
+            --payload file://payload.json \
+            --cli-binary-format raw-in-base64-out \
+            response.json
+
+      # 7️⃣ Debug: Show the actual response
+      - name: Debug Lambda Response
+        run: |
+          echo "Full Lambda Response Content:"
+          cat response.json
+
+      # 8️⃣ Extract PDF URL (Robust Parsing)
       - name: Extract PDF URL
         id: extract_url
         run: |
@@ -114,6 +187,23 @@ jobs:
               sys.exit(1)
           EOF
 
+      # 9️⃣ Post PDF link as PR comment
+      - name: Post PDF link as PR comment
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PDF_URL=$(cat pdf_url.txt)
+          COMMENT=$(jq -n \
+            --arg url "$PDF_URL" \
+            '{ body: "🤖 **AI Code Review Completed**\n\n📄 **PDF Report:** \($url)\n\n_Automated via AWS Lambda + Amazon Bedrock_" }')
+
+          curl -s -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$COMMENT" \
+            "${{ github.event.pull_request.comments_url }}"
+            
       # 9️⃣ Post PDF link as PR comment
       - name: Post PDF link as PR comment
         if: github.event_name == 'pull_request'
