@@ -2,7 +2,7 @@ name: AI Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    branches: [ main ]
 
 jobs:
   code-review:
@@ -11,6 +11,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -24,36 +26,48 @@ jobs:
 
       - name: Collect git diff
         run: |
-          git fetch origin main
-          git diff origin/main > diff.txt
+          git diff origin/main...HEAD > diff.txt
 
       - name: Prepare payload
         run: |
-          jq -n --rawfile diff diff.txt '{
-            files: [{
-              filename: "diff.patch",
-              content: $diff
-            }]
-          }' > payload.json
+          jq -n \
+            --rawfile diff diff.txt \
+            '{
+              files: [
+                {
+                  filename: "git-diff.patch",
+                  content: $diff
+                }
+              ]
+            }' > payload.json
+
+      - name: Base64 encode payload
+        run: |
+          base64 payload.json > payload.b64
 
       - name: Invoke Lambda for AI Code Review
         run: |
           aws lambda invoke \
             --function-name code-review-lambda \
-            --payload file://payload.json \
+            --payload "$(cat payload.b64)" \
             response.json
+
+      - name: Show AI Code Review Result
+        run: cat response.json
 
       - name: Extract PDF URL
         run: |
-          echo "PDF_URL=$(jq -r '.body | fromjson | .pdf_url' response.json)" >> $GITHUB_ENV
+          jq -r '.body' response.json | jq -r '.pdf_url' > pdf_url.txt
 
       - name: Post PDF link as PR comment
         uses: actions/github-script@v7
         with:
           script: |
+            const fs = require('fs');
+            const pdfUrl = fs.readFileSync('pdf_url.txt', 'utf8').trim();
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `🤖 **AI Code Review Completed**\n\n📄 PDF Report:\n${process.env.PDF_URL}`
+              body: `🧠 **AI Code Review Report**\n\n📄 PDF: ${pdfUrl}`
             })
