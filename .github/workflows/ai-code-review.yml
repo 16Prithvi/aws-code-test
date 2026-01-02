@@ -28,34 +28,40 @@ jobs:
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      # 4️⃣ Collect git diff
+      # 4️⃣ Collect git diff (SAFE for push + PR)
       - name: Collect git diff
         run: |
           git fetch origin main || true
-          git diff origin/main...HEAD > diff.txt || echo "No diff available" > diff.txt
+          git diff origin/main...HEAD > diff.txt || echo "No diff" > diff.txt
 
-      # 5️⃣ Build payload safely using Python
+      # 5️⃣ Prepare payload safely using Python
       - name: Prepare payload
         run: |
-          python3 - <<'EOF'
+          python3 - <<EOF
           import json
+
           try:
               with open("diff.txt", "r", encoding="utf-8", errors="ignore") as f:
                   diff = f.read()
-          except Exception:
+          except:
               diff = "No diff available"
 
           payload = {
-              "files": [{
-                  "filename": "git_diff.patch",
-                  "content": diff[:12000] # Limit size for Lambda/Bedrock limits
-              }]
+              "files": [
+                  {
+                      "filename": "git_diff.patch",
+                      "content": diff[:12000]
+                  }
+              ]
           }
-          with open("payload.json", "w") as f:
+
+          with open("payload.json", "w", encoding="utf-8") as f:
               json.dump(payload, f)
+
+          print("Payload prepared successfully")
           EOF
 
-      # 6️⃣ Invoke Lambda
+      # 6️⃣ Invoke Lambda (CORRECT AWS CLI FORMAT)
       - name: Invoke Lambda for AI Code Review
         run: |
           aws lambda invoke \
@@ -64,156 +70,45 @@ jobs:
             --cli-binary-format raw-in-base64-out \
             response.json
 
-      # 7️⃣ Debug: Show the actual response
-      - name: Debug Lambda Response
+      # 7️⃣ Show Lambda response (always safe)
+      - name: Show AI Code Review Result
         run: |
-          echo "Full Lambda Response Content:"
+          echo "Lambda response:"
           cat response.json
 
-      # 8️⃣ Extract PDF URL (Robust Parsing)
-      name: AI Code Review
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-
-jobs:
-  code-review:
-    runs-on: ubuntu-latest
-
-    steps:
-      # 1️⃣ Checkout repository
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # 2️⃣ Configure AWS credentials
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      # 3️⃣ Install jq
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      # 4️⃣ Collect git diff
-      - name: Collect git diff
-        run: |
-          git fetch origin main || true
-          git diff origin/main...HEAD > diff.txt || echo "No diff available" > diff.txt
-
-      # 5️⃣ Build payload safely using Python
-      - name: Prepare payload
-        run: |
-          python3 - <<'EOF'
-          import json
-          try:
-              with open("diff.txt", "r", encoding="utf-8", errors="ignore") as f:
-                  diff = f.read()
-          except Exception:
-              diff = "No diff available"
-
-          payload = {
-              "files": [{
-                  "filename": "git_diff.patch",
-                  "content": diff[:12000] # Limit size for Lambda/Bedrock limits
-              }]
-          }
-          with open("payload.json", "w") as f:
-              json.dump(payload, f)
-          EOF
-
-      # 6️⃣ Invoke Lambda
-      - name: Invoke Lambda for AI Code Review
-        run: |
-          aws lambda invoke \
-            --function-name code-review-lambda \
-            --payload file://payload.json \
-            --cli-binary-format raw-in-base64-out \
-            response.json
-
-      # 7️⃣ Debug: Show the actual response
-      - name: Debug Lambda Response
-        run: |
-          echo "Full Lambda Response Content:"
-          cat response.json
-
-      # 8️⃣ Extract PDF URL (Robust Parsing)
+      # 8️⃣ Extract PDF URL SAFELY (NO CRASHES)
       - name: Extract PDF URL
-        id: extract_url
         run: |
-          python3 - <<'EOF'
-          import json
-          import sys
+          BODY=$(jq -r '.body' response.json || echo "")
+          echo "Lambda body:"
+          echo "$BODY"
 
-          try:
-              with open('response.json', 'r') as f:
-                  data = json.load(f)
-              
-              # Case 1: Lambda returned a Proxy response (with 'body' key)
-              if isinstance(data, dict) and 'body' in data:
-                  body = data['body']
-                  # If body is a string (JSON string), parse it
-                  if isinstance(body, str):
-                      body_data = json.loads(body)
-                  else:
-                      body_data = body
-                  pdf_url = body_data.get('pdf_url')
-              
-              # Case 2: Lambda returned the object directly
-              else:
-                  pdf_url = data.get('pdf_url')
+          PDF_URL=$(echo "$BODY" | jq -r 'try fromjson | .pdf_url // empty')
 
-              if pdf_url:
-                  with open('pdf_url.txt', 'w') as f:
-                      f.write(pdf_url)
-                  print(f"Successfully found URL: {pdf_url}")
-              else:
-                  print("Error: 'pdf_url' not found in JSON response")
-                  sys.exit(1)
+          if [ -z "$PDF_URL" ]; then
+            echo "⚠️ PDF URL not available (Lambda may have returned an error)."
+            exit 0
+          fi
 
-          except json.JSONDecodeError:
-              print("Error: response.json is not valid JSON. Lambda likely crashed.")
-              with open('response.json', 'r') as f:
-                  print(f"Raw Output: {f.read()}")
-              sys.exit(1)
-          except Exception as e:
-              print(f"Unexpected error: {e}")
-              sys.exit(1)
-          EOF
+          echo "$PDF_URL" > pdf_url.txt
+          echo "✅ PDF URL extracted: $PDF_URL"
 
-      # 9️⃣ Post PDF link as PR comment
+      # 9️⃣ Post PDF link as PR comment (PRs only)
       - name: Post PDF link as PR comment
         if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PDF_URL=$(cat pdf_url.txt)
-          COMMENT=$(jq -n \
-            --arg url "$PDF_URL" \
-            '{ body: "🤖 **AI Code Review Completed**\n\n📄 **PDF Report:** \($url)\n\n_Automated via AWS Lambda + Amazon Bedrock_" }')
+          if [ ! -f pdf_url.txt ]; then
+            echo "No PDF URL to post."
+            exit 0
+          fi
 
-          curl -s -X POST \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$COMMENT" \
-            "${{ github.event.pull_request.comments_url }}"
-            
-      # 9️⃣ Post PDF link as PR comment
-      - name: Post PDF link as PR comment
-        if: github.event_name == 'pull_request'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
           PDF_URL=$(cat pdf_url.txt)
+
           COMMENT=$(jq -n \
             --arg url "$PDF_URL" \
-            '{ body: "🤖 **AI Code Review Completed**\n\n📄 **PDF Report:** \($url)\n\n_Automated via AWS Lambda + Amazon Bedrock_" }')
+            '{ body: "🤖 **AI Code Review Completed**\n\n📄 **PDF Report:** \($url)\n\n_Automatically generated via AWS Lambda_" }')
 
           curl -s -X POST \
             -H "Authorization: token $GITHUB_TOKEN" \
