@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout code
+      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -25,28 +25,28 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # 3️⃣ Install jq (used for JSON creation)
+      # 3️⃣ Install jq
       - name: Install jq
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      # 4️⃣ Collect git diff safely
+      # 4️⃣ Collect git diff
       - name: Collect git diff
         run: |
           git diff HEAD~1 HEAD > diff.txt || echo "" > diff.txt
 
-      # 5️⃣ Prepare payload (base64-safe, ASCII-safe)
+      # 5️⃣ Prepare JSON payload (NO base64 here)
       - name: Prepare payload
         run: |
           jq -n --arg diff "$(cat diff.txt)" \
           '{ files: [ { filename: "git_diff.patch", content: $diff } ] }' \
-          | base64 > payload.b64
+          > payload.json
 
       # 6️⃣ Invoke Lambda (correct AWS CLI v2 format)
       - name: Invoke Lambda for AI Code Review
         run: |
           aws lambda invoke \
             --function-name code-review-lambda \
-            --payload file://payload.b64 \
+            --payload file://payload.json \
             --cli-binary-format raw-in-base64-out \
             response.json
 
