@@ -1,23 +1,17 @@
 name: AI Code Review
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
+    types: [opened, synchronize]
 
 jobs:
   code-review:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      # 2️⃣ Configure AWS credentials
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -25,51 +19,41 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # 3️⃣ Install jq
       - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
+        run: sudo apt-get install -y jq
 
-      # 4️⃣ Collect git diff
       - name: Collect git diff
         run: |
-          git diff HEAD~1 HEAD > diff.txt || echo "" > diff.txt
+          git fetch origin main
+          git diff origin/main > diff.txt
 
-      # 5️⃣ Prepare JSON payload (NO base64 here)
       - name: Prepare payload
         run: |
-          jq -n --arg diff "$(cat diff.txt)" \
-          '{ files: [ { filename: "git_diff.patch", content: $diff } ] }' \
-          > payload.json
+          jq -n --rawfile diff diff.txt '{
+            files: [{
+              filename: "diff.patch",
+              content: $diff
+            }]
+          }' > payload.json
 
-      # 6️⃣ Invoke Lambda (correct AWS CLI v2 format)
       - name: Invoke Lambda for AI Code Review
         run: |
           aws lambda invoke \
             --function-name code-review-lambda \
             --payload file://payload.json \
-            --cli-binary-format raw-in-base64-out \
             response.json
 
-      # 7️⃣ Show Lambda response
-      - name: Show AI Code Review Result
+      - name: Extract PDF URL
         run: |
-          cat response.json
-      # 8️⃣ Post PDF link as PR comment (only for PRs)
+          echo "PDF_URL=$(jq -r '.body | fromjson | .pdf_url' response.json)" >> $GITHUB_ENV
+
       - name: Post PDF link as PR comment
-        if: github.event_name == 'pull_request'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          PDF_URL=$(cat response.json | jq -r '.body' | jq -r '.pdf_url')
-
-          COMMENT_BODY=$(jq -n \
-            --arg url "$PDF_URL" \
-            '{
-              body: "🤖 **AI Code Review Completed**\n\n📄 **PDF Report:** \($url)\n\n_Generated automatically via AWS Lambda + Amazon Bedrock_"
-            }')
-
-          curl -s -X POST \
-            -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$COMMENT_BODY" \
-            "${{ github.event.pull_request.comments_url }}"
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `🤖 **AI Code Review Completed**\n\n📄 PDF Report:\n${process.env.PDF_URL}`
+            })
